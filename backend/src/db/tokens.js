@@ -1,12 +1,75 @@
 const db = require('./index');
+const axios = require('axios');
 const { encrypt, decrypt } = require('../utils/crypto');
 
 const DEBUG = process.env.DEBUG_TOKENS === 'true';
 
-const saveToken = async ({ userId = null, service, accessToken, refreshToken, expiresIn }) => {
+/**
+ * Holt die HubSpot-Portal-ID (hub_id) mithilfe des Access Tokens
+ */
+const fetchHubspotHubId = async (accessToken) => {
+  try {
+    const res = await axios.get(`https://api.hubapi.com/oauth/v1/access-tokens/${accessToken}`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+
+    return res.data.hub_id;
+  } catch (err) {
+    console.error('❌ Fehler beim Abrufen der hub_id:', err.response?.data || err.message);
+    throw err;
+  }
+};
+
+/**
+ * Holt oder erstellt eine Organisation anhand der hub_id
+ */
+const ensureOrgExists = async (hubId) => {
+  const existing = await db.query(
+    'SELECT id FROM orgs WHERE hubspot_portal_id = $1',
+    [hubId]
+  );
+  if (existing.rows.length > 0) {
+    return existing.rows[0].id;
+  }
+
+  const inserted = await db.query(
+    'INSERT INTO orgs (hubspot_portal_id) VALUES ($1) RETURNING id',
+    [hubId]
+  );
+  return inserted.rows[0].id;
+};
+
+/**
+ * Holt oder erstellt einen Nutzer anhand des Bezeichners (z. B. cust001) und ordnet ihn einer Org zu
+ */
+const ensureUserExists = async (userIdentifier, orgId) => {
+  const existing = await db.query(
+    'SELECT id FROM users WHERE user_identifier = $1',
+    [userIdentifier]
+  );
+
+  if (existing.rows.length > 0) {
+    return existing.rows[0].id;
+  }
+
+  const inserted = await db.query(
+    'INSERT INTO users (user_identifier, org_id) VALUES ($1, $2) RETURNING id',
+    [userIdentifier, orgId]
+  );
+  return inserted.rows[0].id;
+};
+
+/**
+ * Speichert einen Token (verschlüsselt), verknüpft mit User und Organisation
+ */
+const saveToken = async ({ userId, service, accessToken, refreshToken, expiresIn }) => {
   const expiresAt = new Date(Date.now() + expiresIn * 1000);
 
   try {
+    const hubId = await fetchHubspotHubId(accessToken);
+    const orgId = await ensureOrgExists(hubId);
+    const internalUserId = await ensureUserExists(userId, orgId); // wandelt userIdentifier → user.id
+
     const encryptedAccess = encrypt(accessToken);
     const encryptedRefresh = encrypt(refreshToken);
 
@@ -19,39 +82,44 @@ const saveToken = async ({ userId = null, service, accessToken, refreshToken, ex
 
     await db.query(
       `
-      INSERT INTO tokens (user_id, service, access_token, refresh_token, expires_at)
-      VALUES ($1, $2, $3, $4, $5)
+      INSERT INTO tokens (user_id, service, access_token, refresh_token, expires_at, org_id)
+      VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (user_id, service)
       DO UPDATE SET
         access_token = EXCLUDED.access_token,
         refresh_token = EXCLUDED.refresh_token,
         expires_at = EXCLUDED.expires_at,
+        org_id = EXCLUDED.org_id,
         created_at = NOW()
       `,
-      [userId, service, encryptedAccess, encryptedRefresh, expiresAt]
+      [internalUserId, service, encryptedAccess, encryptedRefresh, expiresAt, orgId]
     );
 
-    console.log(`🔐 Token für ${service} (${userId || 'anonymous'}) verschlüsselt gespeichert`);
+    console.log(`🔐 Token für ${service} (${userId}) gespeichert (User-ID: ${internalUserId}, Org-ID: ${orgId}, Hub-ID: ${hubId})`);
   } catch (err) {
     console.error('❌ Fehler beim Speichern des Tokens:', err);
   }
 };
 
-const getToken = async (userId, service) => {
+/**
+ * Holt und entschlüsselt den zuletzt gespeicherten Token für user_identifier + service
+ */
+const getToken = async (userIdentifier, service) => {
   try {
     const result = await db.query(
       `
-      SELECT access_token, refresh_token, expires_at
-      FROM tokens
-      WHERE ${userId === null ? 'user_id IS NULL' : 'user_id = $1'} AND service = $2
-      ORDER BY created_at DESC
+      SELECT t.access_token, t.refresh_token, t.expires_at
+      FROM tokens t
+      JOIN users u ON t.user_id = u.id
+      WHERE u.user_identifier = $1 AND t.service = $2
+      ORDER BY t.created_at DESC
       LIMIT 1
       `,
-      userId === null ? [service] : [userId, service]
+      [userIdentifier, service]
     );
 
     if (result.rows.length === 0) {
-      console.warn(`⚠️ Kein Token gefunden für ${service} (${userId || 'anonymous'})`);
+      console.warn(`⚠️ Kein Token gefunden für ${service} (${userIdentifier})`);
       return null;
     }
 
