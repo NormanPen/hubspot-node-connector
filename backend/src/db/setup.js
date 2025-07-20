@@ -1,8 +1,30 @@
+/**
+ * @fileoverview Sets up the PostgreSQL database schema for the HubSpot Connector.
+ * Creates tables for organizations, users, and tokens if they do not exist.
+ */
+
 const db = require('./index');
 
+/**
+ * Creates database tables for organizations, users, and tokens.
+ * Ensures proper relations between entities:
+ * - A user belongs to an organization
+ * - A token is linked to both a user and an organization
+ *
+ * Tables created:
+ * - orgs: Stores HubSpot portal IDs
+ * - users: Internal users linked to orgs
+ * - tokens: Stores encrypted OAuth tokens per user/service
+ *
+ * Uses SQL `CREATE TABLE IF NOT EXISTS` statements.
+ *
+ * @async
+ * @function createSchema
+ * @returns {Promise<void>}
+ */
 const createSchema = async () => {
   try {
-    // Organisationen (HubSpot-Portal-ID)
+    // Organizations (HubSpot portal IDs)
     await db.query(`
       CREATE TABLE IF NOT EXISTS orgs (
         id SERIAL PRIMARY KEY,
@@ -11,7 +33,7 @@ const createSchema = async () => {
       );
     `);
 
-    // Nutzer mit Identifier wie "cust001"
+    // Users with external identifiers like "cust001"
     await db.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -22,7 +44,7 @@ const createSchema = async () => {
       );
     `);
 
-    // Tokens (zugeordnet zu Nutzer + Organisation)
+    // Tokens (linked to user + organization)
     await db.query(`
       CREATE TABLE IF NOT EXISTS tokens (
         id SERIAL PRIMARY KEY,
@@ -37,10 +59,11 @@ const createSchema = async () => {
       );
     `);
 
-    console.log('✅ Tabellen "orgs", "users" und "tokens" wurden angelegt (falls nicht vorhanden)');
+    console.log('✅ Tables "orgs", "users", and "tokens" have been created if they did not exist.');
   } catch (err) {
-    console.error('❌ Fehler beim Anlegen der Tabellen:', err);
+    console.error('❌ Error while creating schema tables:', err);
   }
 };
 
+// Run on script execution
 createSchema();

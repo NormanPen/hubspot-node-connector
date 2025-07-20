@@ -1,3 +1,9 @@
+/**
+ * @fileoverview Functions to manage OAuth tokens and related entities in the database.
+ * Includes helpers to fetch the HubSpot portal ID, ensure related orgs and users exist,
+ * and store/retrieve encrypted tokens.
+ */
+
 const db = require('./index');
 const axios = require('axios');
 const { encrypt, decrypt } = require('../utils/crypto');
@@ -5,7 +11,11 @@ const { encrypt, decrypt } = require('../utils/crypto');
 const DEBUG = process.env.DEBUG_TOKENS === 'true';
 
 /**
- * Holt die HubSpot-Portal-ID (hub_id) mithilfe des Access Tokens
+ * Fetches the HubSpot portal ID (hub_id) using the given access token.
+ *
+ * @param {string} accessToken - The access token to query HubSpot with
+ * @returns {Promise<string>} The hub_id associated with the token
+ * @throws {Error} If the API call fails
  */
 const fetchHubspotHubId = async (accessToken) => {
   try {
@@ -21,7 +31,10 @@ const fetchHubspotHubId = async (accessToken) => {
 };
 
 /**
- * Holt oder erstellt eine Organisation anhand der hub_id
+ * Ensures that a HubSpot organization exists in the DB and returns its ID.
+ *
+ * @param {string} hubId - The HubSpot portal ID
+ * @returns {Promise<number>} The internal org ID
  */
 const ensureOrgExists = async (hubId) => {
   const existing = await db.query(
@@ -40,7 +53,11 @@ const ensureOrgExists = async (hubId) => {
 };
 
 /**
- * Holt oder erstellt einen Nutzer anhand des Bezeichners (z. B. cust001) und ordnet ihn einer Org zu
+ * Ensures that a user exists for a given identifier and org ID.
+ *
+ * @param {string} userIdentifier - The logical user ID (e.g., "cust001")
+ * @param {number} orgId - The ID of the organization this user belongs to
+ * @returns {Promise<number>} The internal user ID
  */
 const ensureUserExists = async (userIdentifier, orgId) => {
   const existing = await db.query(
@@ -60,7 +77,14 @@ const ensureUserExists = async (userIdentifier, orgId) => {
 };
 
 /**
- * Speichert einen Token (verschlüsselt), verknüpft mit User und Organisation
+ * Saves a new OAuth token, encrypted and linked to the correct user and org.
+ *
+ * @param {Object} params
+ * @param {string} params.userId - The external identifier for the user
+ * @param {string} params.service - The service name (e.g., 'hubspot')
+ * @param {string} params.accessToken - The new access token
+ * @param {string} params.refreshToken - The corresponding refresh token
+ * @param {number} params.expiresIn - Seconds until token expiration
  */
 const saveToken = async ({ userId, service, accessToken, refreshToken, expiresIn }) => {
   const expiresAt = new Date(Date.now() + expiresIn * 1000);
@@ -68,7 +92,7 @@ const saveToken = async ({ userId, service, accessToken, refreshToken, expiresIn
   try {
     const hubId = await fetchHubspotHubId(accessToken);
     const orgId = await ensureOrgExists(hubId);
-    const internalUserId = await ensureUserExists(userId, orgId); // wandelt userIdentifier → user.id
+    const internalUserId = await ensureUserExists(userId, orgId);
 
     const encryptedAccess = encrypt(accessToken);
     const encryptedRefresh = encrypt(refreshToken);
@@ -102,7 +126,11 @@ const saveToken = async ({ userId, service, accessToken, refreshToken, expiresIn
 };
 
 /**
- * Holt und entschlüsselt den zuletzt gespeicherten Token für user_identifier + service
+ * Retrieves and decrypts the latest stored token for a user and service.
+ *
+ * @param {string} userIdentifier - The external user ID (e.g., "cust001")
+ * @param {string} service - The name of the service (e.g., 'hubspot')
+ * @returns {Promise<Object|null>} The decrypted token or null if not found
  */
 const getToken = async (userIdentifier, service) => {
   try {

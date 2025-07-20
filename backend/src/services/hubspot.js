@@ -1,16 +1,24 @@
+/**
+ * @fileoverview Functions to call HubSpot APIs and refresh access tokens.
+ * Handles token refresh flow and token storage.
+ */
+
 const axios = require('axios');
 const qs = require('qs');
 const { getToken, saveToken } = require('../db/tokens');
 
 /**
- * Holt die HubSpot-Portal-ID anhand des neuen Access Tokens
+ * Retrieves the HubSpot portal ID (hub_id) using an access token.
+ *
+ * @param {string} accessToken - The access token to query HubSpot with.
+ * @returns {Promise<string>} The `hub_id` of the authenticated HubSpot account.
+ * @throws Will throw if the token is invalid or the request fails.
  */
 const fetchHubspotHubId = async (accessToken) => {
   try {
     const res = await axios.get(`https://api.hubapi.com/oauth/v1/access-tokens/${accessToken}`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
-
     return res.data.hub_id;
   } catch (err) {
     console.error('❌ Fehler beim Abrufen der hub_id:', err.response?.data || err.message);
@@ -19,8 +27,12 @@ const fetchHubspotHubId = async (accessToken) => {
 };
 
 /**
- * Frischt den Access Token mit dem Refresh Token auf – speichert neuen Token
- * @param {string} userIdentifier z. B. "cust001"
+ * Refreshes the HubSpot access token using a refresh token and stores the result.
+ *
+ * @param {string} userIdentifier - Internal user ID (e.g. "cust001").
+ * @param {string} refreshToken - The valid refresh token to use for renewing the access token.
+ * @returns {Promise<string>} The new access token.
+ * @throws Will throw if the refresh fails.
  */
 const refreshAccessToken = async (userIdentifier, refreshToken) => {
   try {
@@ -32,15 +44,13 @@ const refreshAccessToken = async (userIdentifier, refreshToken) => {
     });
 
     const response = await axios.post('https://api.hubapi.com/oauth/v1/token', data, {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     });
 
     const tokenData = response.data;
 
     await saveToken({
-      userId: userIdentifier, // wichtig: userIdentifier, wird intern in user_id gemappt
+      userId: userIdentifier,
       service: 'hubspot',
       accessToken: tokenData.access_token,
       refreshToken,
@@ -56,7 +66,16 @@ const refreshAccessToken = async (userIdentifier, refreshToken) => {
 };
 
 /**
- * Führt einen API-Call mit gültigem Token durch, versucht bei 401 Refresh
+ * Calls a HubSpot API endpoint using the stored access token. Refreshes the token on 401.
+ *
+ * @param {Object} options - The request parameters.
+ * @param {string|null} [options.userId=null] - The internal user identifier.
+ * @param {string} [options.service='hubspot'] - The service name (default: "hubspot").
+ * @param {string} [options.method='GET'] - HTTP method (e.g. "GET", "POST").
+ * @param {string} options.endpoint - API endpoint to call (e.g. "/crm/v3/objects/contacts").
+ * @param {Object|null} [options.data=null] - Payload for POST/PUT requests.
+ * @returns {Promise<any>} The response data from HubSpot.
+ * @throws Will throw if the call or retry fails.
  */
 const callHubspotApi = async ({ userId = null, service = 'hubspot', method = 'GET', endpoint, data = null }) => {
   let token = await getToken(userId, service);
